@@ -1,4 +1,4 @@
-# BERT Implementation
+
 This repository is an attempt to implement **BERT** from scratch. The goal is to understand the inner workings of BERT by building it step-by-step, rather than relying on pre-built libraries. Through this process, we aim to gain a deeper understanding of its architecture and functionality.
 
 # BERT
@@ -40,9 +40,11 @@ Now, let's discuss the model architecture: it consists of 12 layers, 12 attentio
 Each block is the same as a Transformer encoder, but the final part differs due to the MLM and NSP tasks.
 
 We've briefly discussed about BERT.
-Now, lets move on to the implementation par
+Now, lets move on to the implementation part
 
 
+
+# Implementation
 
 
 ## Installation
@@ -83,4 +85,261 @@ print("cls_idx =", cls_idx)
 
 ## Setting the hyperparameters
 
+```py
+BATCH_SIZE = 256
+LAMBDA = 0.01 # l2 Regularization
+EPOCH = 40
+max_len = 512
+criterion = nn.CrossEntropyLoss(ignore_index = -100) # ignore the unmasked tokens
 
+n_layers = 12
+d_model = 768
+d_ff = 3012
+n_heads = 12
+drop_p = 0.1
+
+### Linear Scheduler ###
+warmup_steps = 10000
+LR_peak = 1e-4
+```
+
+## Dataset preprocessing
+```py
+dataset = load_dataset('wikitext', 'wikitext-2-raw-v1')
+def split_sentences(text):
+    # separate the sentence
+    sentences = text.split(". ")
+    return sentences
+
+# extract the 'text' part and put it in the list
+texts = []
+for example in dataset['train']:
+    sentences = split_sentences(example['text'])
+    texts.extend(sentences)
+
+texts=texts[:10000]
+data=texts
+```
+
+## Define the DataLoader
+```py
+class CustomDataset(torch.utils.data.Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def mask_tokens(self, sentence):
+        #Masking probability
+        MASK_PROB = 0.15
+        # [CLS]+sentence1 +[SEP]+ sentence2 +[SEP] ==> tokenize
+        input_ids = tokenizer.encode(sentence, truncation=True, max_length=max_len, add_special_tokens=False)
+
+        segment_ids = []
+        labels = []
+        is_second_sentence = False
+        for i, token in enumerate(input_ids):
+            if token == sep_idx:
+                is_second_sentence = True
+            segment_ids.append(0 if not is_second_sentence else 1)
+            # Random masking
+            val = random.random()
+            if val <= MASK_PROB and token not in {tokenizer.cls_token_id, tokenizer.sep_token_id, tokenizer.pad_token_id}:
+                labels.append(token)
+                val = random.random()
+                if val < 0.8: # with 80% probability, replace the token with a [MASK] token
+                    input_ids[i] = mask_idx
+                elif 0.8 <= val < 0.9: # with 10% probability, replace the token with a random token
+                    input_ids[i] = random.choice(list(tokenizer.get_vocab().values()))
+            else:
+                labels.append(-100)
+
+        return torch.tensor(input_ids), torch.tensor(labels), torch.tensor(segment_ids)
+
+    def __getitem__(self, idx):
+        sentence1 = self.data[idx]
+
+        if random.random() > 0.5:  # 50% chance to use consecutive sentences
+            next_idx = idx + 1 if idx + 1 < len(self.data) else 0
+            sentence2 = self.data[next_idx]
+            nsp_label = torch.tensor(1)  # True next sentence
+        else:  # 50% chance to use random sentence
+            random_idx = random.randint(0, len(self.data) - 1)
+            sentence2 = self.data[random_idx]
+            nsp_label = torch.tensor(0)  # Not a true next sentence
+
+        combined_sentence = '[CLS]' + sentence1 + '[SEP]' + sentence2 + '[SEP]'
+
+        input_ids, mtp_label, segment_ids = self.mask_tokens(combined_sentence)
+
+        return input_ids, mtp_label, nsp_label, segment_ids
+```
+Through the **`getitem`** function, we combine two sentences. If a generated random number is greater than 0.5, we append a random sentence and set the NSP label to 0. If the number is less than or equal to 0.5, we append a random sentence and set the NSP label to 1.
+
+The **`mask_tokens`** function takes the combined form of the two sentences, performs masking, and outputs the segment embeddings, token embeddings, and MTP labels.
+
+
+```py
+def custom_collate_fn(batch):
+    input_ids = [item[0] for item in batch]
+    mtp_labels = [item[1] for item in batch]
+    nsp_labels = [item[2] for item in batch]
+    segment_ids = [item[3] for item in batch]
+
+    input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id)
+    mtp_labels = pad_sequence(mtp_labels, batch_first=True, padding_value=-100)
+    segment_ids = pad_sequence(segment_ids, batch_first=True, padding_value=0)
+
+    nsp_labels = torch.stack(nsp_labels)
+
+    return input_ids, mtp_labels, nsp_labels, segment_ids
+
+# Assuming your data is a list of sentences
+data =texts  #[sentence1 , sentence 2, sentence 3 ...] 
+
+custom_DS = CustomDataset(data)
+
+train_DS, val_DS, test_DS= torch.utils.data.random_split(custom_DS, [9700, 200, 100])
+
+train_DL = torch.utils.data.DataLoader(train_DS, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate_fn)
+val_DL = torch.utils.data.DataLoader(val_DS, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate_fn)
+test_DL = torch.utils.data.DataLoader(test_DS, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate_fn)
+
+print((train_DS.data))
+print(len(val_DS))
+print(len(test_DS))
+```
+I couldn't find it in the paper, but according to various blogs, the padding for segment_id is usually set to 0. With this padding, we generate the DL as described above
+# Model architecture
+
+## Multi head attention 
+```py
+class MHA(nn.Module):
+    def __init__(self, d_model, n_heads, drop_p):
+        super().__init__()
+
+        self.n_heads = n_heads
+
+        self.fc_q = nn.Linear(d_model, d_model)
+        self.fc_k = nn.Linear(d_model, d_model)
+        self.fc_v = nn.Linear(d_model, d_model)
+        self.fc_o = nn.Linear(d_model, d_model)
+
+        self.dropout = nn.Dropout(drop_p)
+        self.scale = torch.sqrt(torch.tensor(d_model / n_heads))
+
+    def forward(self, x, mask=None):
+        Q = self.fc_q(x)  # numworddim
+        K = self.fc_k(x)
+        V = self.fc_v(x)
+
+        Q = rearrange(Q, 'num word (head dim) -> num head word dim', head=self.n_heads)
+        K = rearrange(K, 'num word (head dim) -> num head word dim', head=self.n_heads)
+        V = rearrange(V, 'num word (head dim) -> num head word dim', head=self.n_heads)
+
+        attention_score = Q @ K.transpose(-2, -1) / self.scale 
+
+        if mask is not None:
+            attention_score[mask] = -1e10
+        attention_weights = torch.softmax(attention_score, dim=-1) 
+
+        attention_weights = self.dropout(attention_weights)
+
+        attention = attention_weights @ V
+
+        x = rearrange(attention, 'num head word dim -> num word (head dim)')
+        x = self.fc_o(x)  # numworddim
+
+        return x, attention_weights
+```
+I'm sure the image below will help you understand the code clearly
+
+☺️
+
+
+![image](https://github.com/justinshin0204/BERT/assets/93083019/84474740-3002-4b95-9a41-3fd64287db55)
+
+## Feedforward
+```py
+class FeedForward(nn.Module):
+    def __init__(self, d_model, d_ff, drop_p):
+        super().__init__()
+
+        self.linear = nn.Sequential(nn.Linear(d_model, d_ff),
+                                    nn.GELU(),
+                                    nn.Dropout(drop_p),
+                                    nn.Linear(d_ff, d_model))
+
+    def forward(self, x):
+        x = self.linear(x)
+        return x
+```
+This part is quite straightforward
+
+## Encoderlayer
+```py
+class EncoderLayer(nn.Module): # attention -> drop -> add -> norm
+    def __init__(self, d_model, d_ff, n_heads, drop_p):
+        super().__init__()
+
+        self.self_atten = MHA(d_model, n_heads, drop_p)
+        self.self_atten_LN = nn.LayerNorm(d_model)
+
+        self.FF = FeedForward(d_model, d_ff, drop_p)
+        self.FF_LN = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(drop_p)
+
+    def forward(self, x, enc_mask):
+        residual = x
+
+        atten_output, _ = self.self_atten(x, enc_mask)
+        atten_output = self.dropout(atten_output)
+        x = residual + atten_output
+        x = self.self_atten_LN(x)
+
+        residual = x
+        ff_output = self.FF(x)
+        ff_output = self.dropout(ff_output)
+        x = residual + ff_output
+        x = self.FF_LN(x)
+
+        return x
+```
+This EncoderLayer class implements a Transformer encoder layer where each sub-layer follows the order: attention -> dropout -> add -> layer normalization.
+
+## Encoder
+```py
+class Encoder(nn.Module):
+    def __init__(self, vocab_size, max_len, n_layers, d_model, d_ff, n_heads, drop_p):
+        super().__init__()
+
+        self.token_embedding = nn.Embedding(vocab_size, d_model)
+        self.pos_embedding = nn.Embedding(max_len, d_model)
+        self.seg_embedding = nn.Embedding(2, d_model)
+
+        self.dropout = nn.Dropout(drop_p)
+
+        self.layers = nn.ModuleList([EncoderLayer(d_model, d_ff, n_heads, drop_p) for _ in range(n_layers)])
+
+        self.LN_out = nn.LayerNorm(d_model)
+
+    def forward(self, x, seg, enc_mask, atten_map_save = False): 
+
+        pos = torch.arange(x.shape[1]).expand_as(x).to(DEVICE) # pos.shape=> num x words
+
+        x = self.token_embedding(x) + self.pos_embedding(pos) + self.seg_embedding(seg) # 개단차
+        x = self.dropout(x)
+
+        atten_encs = torch.tensor([]).to(DEVICE)
+        for layer in self.layers:
+            x, atten_enc = layer(x, enc_mask)
+            if atten_map_save is True:
+                atten_encs = torch.cat([atten_encs , atten_enc[0].unsqueeze(0)], dim=0) # 층헤단단 ㅋ
+
+        x = self.LN_out(x) # pre-acrivation 이기 때문에 fc_out 전에 (CNN 에서는 GAP-fc => BN-relu-GAP-fc 로 추가했었음)
+        # 그리고, activation 없이 바로 fc_out 통과시키더라 (https://github.com/graykode/gpt-2-Pytorch/blob/master/GPT2/model.py#L205 참고)
+
+        return x, atten_encs
+```

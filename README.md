@@ -375,7 +375,6 @@ class BERT(nn.Module):
 
         return out
 ## BERT_LM
-```py
 class BERT_LM(nn.Module): 
     def __init__(self, bert, vocab_size, d_model):
         super().__init__()
@@ -393,4 +392,71 @@ class BERT_LM(nn.Module):
         x = self.bert(x, seg, atten_map_save)
 
         return self.nsp(x[:,0]), self.mtp(x)
+```
+
+# Training
+Now its time to finally test your model!
+
+```py
+def Train(model, train_DL, val_DL, criterion, optimizer, scheduler = None):
+    loss_history = {"train": [], "val": []}
+    best_loss = 9999
+    for ep in range(EPOCH):
+        epoch_start = time.time()
+
+        model.train() # train mode로 전환
+        train_loss = loss_epoch(model, train_DL, criterion, optimizer = optimizer, scheduler = scheduler)
+        loss_history["train"] += [train_loss]
+
+        model.eval() # test mode로 전환
+        with torch.no_grad():
+            val_loss = loss_epoch(model, val_DL, criterion)
+            loss_history["val"] += [val_loss]
+            if val_loss < best_loss:
+                best_loss = val_loss
+                torch.save({"model": model,
+                            "ep": ep,
+                            "optimizer": optimizer,
+                            "scheduler": scheduler,}, save_model_path)
+        # print loss
+        print(f"Epoch {ep+1}: train loss: {train_loss:.5f}   val loss: {val_loss:.5f}   current_LR: {optimizer.param_groups[0]['lr']:.8f}   time: {time.time()-epoch_start:.0f} s")
+        print("-" * 20)
+
+    torch.save({"loss_history": loss_history,
+                "EPOCH": EPOCH,
+                "BATCH_SIZE": BATCH_SIZE}, save_history_path)
+
+def Test(model, test_DL, criterion):
+    model.eval() # test mode로 전환
+    with torch.no_grad():
+        test_loss = loss_epoch(model, test_DL, criterion)
+    print(f"Test loss: {test_loss:.3f} | Test PPL: {math.exp(test_loss):.3f}")
+
+def loss_epoch(model, DL, criterion, optimizer = None, scheduler = None):
+    N = len(DL.dataset) # the number of data
+
+    rloss=0
+    for x_batch, mtp_label, nsp_label, seg in tqdm(DL, leave=False):
+        x_batch = x_batch.to(DEVICE)
+        mtp_label = mtp_label.to(DEVICE)
+        nsp_label = nsp_label.to(DEVICE)
+        seg = seg.to(DEVICE)
+        # inference
+        y_hat_NSP = model(x_batch, seg)[0]
+        y_hat_MTP = model(x_batch, seg)[1]
+        # NSP와 MTP 각각에 대한 손실 계산
+        nsp_loss = criterion(y_hat_NSP, nsp_label)
+        mtp_loss = criterion(y_hat_MTP.permute(0,2,1), mtp_label) # y_hat은 개차단이 되어야
+        loss = nsp_loss + mtp_loss
+        # update
+        if optimizer is not None:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        # loss accumulation
+        rloss += loss.item() * x_batch.shape[0]
+    loss_e = rloss/N
+    return loss_e
 ```

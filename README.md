@@ -325,21 +325,72 @@ class Encoder(nn.Module):
 
         self.LN_out = nn.LayerNorm(d_model)
 
-    def forward(self, x, seg, enc_mask, atten_map_save = False): 
+    def forward(self, x, seg, enc_mask, atten_map_save = False):
 
-        pos = torch.arange(x.shape[1]).expand_as(x).to(DEVICE) # pos.shape=> num x words
+        pos = torch.arange(x.shape[1]).expand_as(x) 
 
-        x = self.token_embedding(x) + self.pos_embedding(pos) + self.seg_embedding(seg) # 개단차
+        x = self.token_embedding(x) + self.pos_embedding(pos) + self.seg_embedding(seg) 
         x = self.dropout(x)
 
-        atten_encs = torch.tensor([]).to(DEVICE)
         for layer in self.layers:
-            x, atten_enc = layer(x, enc_mask)
-            if atten_map_save is True:
-                atten_encs = torch.cat([atten_encs , atten_enc[0].unsqueeze(0)], dim=0) # 층헤단단 ㅋ
+            x= layer(x, enc_mask)
 
-        x = self.LN_out(x) # pre-acrivation 이기 때문에 fc_out 전에 (CNN 에서는 GAP-fc => BN-relu-GAP-fc 로 추가했었음)
-        # 그리고, activation 없이 바로 fc_out 통과시키더라 (https://github.com/graykode/gpt-2-Pytorch/blob/master/GPT2/model.py#L205 참고)
+        return x
+```
 
-        return x, atten_encs
+## BERT
+```py
+class BERT(nn.Module):
+    def __init__(self, vocab_size, max_len, n_layers, d_model, d_ff, n_heads, drop_p):
+        super().__init__()
+
+        self.encoder = Encoder(vocab_size, max_len, n_layers, d_model, d_ff, n_heads, drop_p)
+
+        self.n_heads = n_heads
+
+        # 초기화 기법은 GPT-2 참고해서 만듦
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.02)
+            elif isinstance(m, nn.Embedding):
+                nn.init.normal_(m.weight, mean=0, std=0.02)
+
+    def make_enc_mask(self, x): # x.shape = 개단
+
+        enc_mask = (x == pad_idx).unsqueeze(1).unsqueeze(2) 
+        enc_mask = enc_mask.expand(x.shape[0], self.n_heads, x.shape[1], x.shape[1])
+        """ pad mask 
+        F F T T
+        F F T T
+        F F T T
+        F F T T
+        """
+        return enc_mask
+
+    def forward(self, x, seg, atten_map_save = False):
+
+        enc_mask = self.make_enc_mask(x)
+
+        out= self.encoder(x, seg, enc_mask, atten_map_save = atten_map_save)
+
+        return out
+## BERT_LM
+```py
+class BERT_LM(nn.Module): 
+    def __init__(self, bert, vocab_size, d_model):
+        super().__init__()
+
+        self.bert = bert
+
+        self.nsp = nn.Linear(d_model, 2) # NSP: Next Sentence Prediction
+        self.mtp = nn.Linear(d_model, vocab_size) # MTP: Masked Token Prediction
+
+        nn.init.normal_(self.nsp.weight, mean=0, std=0.02)
+        nn.init.normal_(self.mtp.weight, mean=0, std=0.02)
+
+    def forward(self, x, seg, atten_map_save = False):
+
+        x = self.bert(x, seg, atten_map_save)
+
+        return self.nsp(x[:,0]), self.mtp(x)
 ```

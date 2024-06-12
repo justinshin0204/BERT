@@ -88,6 +88,7 @@ print("cls_idx =", cls_idx)
 ## Setting the hyperparameters
 
 ```py
+vocab_size = tokenizer.vocab_size
 BATCH_SIZE = 256
 LAMBDA = 0.01 # l2 Regularization
 EPOCH = 40

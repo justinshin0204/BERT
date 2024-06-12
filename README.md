@@ -481,19 +481,18 @@ def loss_epoch(model, DL, criterion, optimizer = None, scheduler = None):
 ## Make the model
 ```py
 from transformers import get_scheduler
-
+params = [p for p in model.parameters() if p.requires_grad] 
+optimizer = optim.Adam(nn.Linear(1, 1).parameters(), lr=0)
 scheduler = get_scheduler(
     "linear",
     optimizer=optimizer,
-    num_warmup_steps=num_warmup_steps,
-    num_training_steps=num_training_steps,
+    num_warmup_steps=warmup_steps,
+    num_training_steps=int(len(train_DS)*EPOCH/BATCH_SIZE)
 )
 
 
 bert = BERT(vocab_size, max_len, n_layers, d_model, d_ff, n_heads, drop_p).to(DEVICE)
-model = BERTLM(bert, vocab_size, d_model).to(DEVICE)
-params = [p for p in model.parameters() if p.requires_grad] 
-optimizer = optim.Adam(nn.Linear(1, 1).parameters(), lr=0)
+model = BERT_LM(bert, vocab_size, d_model).to(DEVICE)
 Train(model, train_DL, val_DL, criterion, optimizer, scheduler)
 
 torch.save(model.state_dict(), save_model_path)

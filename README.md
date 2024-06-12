@@ -65,7 +65,7 @@ from torch.nn.utils.rnn import pad_sequence
 import time
 import torch
 from einops import rearrange
-
+from tqdm import tqdm
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(DEVICE)
@@ -110,6 +110,9 @@ drop_p = 0.1
 ### Linear Scheduler ###
 warmup_steps = 10000
 LR_peak = 1e-4
+
+save_model_path = "you should fill this part on your own"
+save_history_path = "you should fill this part on your own"
 ```
 I set up the hyperparameters for BERT base because BERT large was too heavy, but even BERT base is still too heavy.😅
 you can change the setups if you want
@@ -362,14 +365,13 @@ class BERT(nn.Module):
 
         self.n_heads = n_heads
 
-        # 초기화 기법은 GPT-2 참고해서 만듦
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, mean=0, std=0.02)
             elif isinstance(m, nn.Embedding):
                 nn.init.normal_(m.weight, mean=0, std=0.02)
 
-    def make_enc_mask(self, x): # x.shape = 개단
+    def make_enc_mask(self, x): 
 
         enc_mask = (x == pad_idx).unsqueeze(1).unsqueeze(2) 
         enc_mask = enc_mask.expand(x.shape[0], self.n_heads, x.shape[1], x.shape[1])
@@ -475,4 +477,24 @@ def loss_epoch(model, DL, criterion, optimizer = None, scheduler = None):
         rloss += loss.item() * x_batch.shape[0]
     loss_e = rloss/N
     return loss_e
+```
+## Make the model
+```py
+from transformers import get_scheduler
+
+scheduler = get_scheduler(
+    "linear",
+    optimizer=optimizer,
+    num_warmup_steps=num_warmup_steps,
+    num_training_steps=num_training_steps,
+)
+
+
+bert = BERT(vocab_size, max_len, n_layers, d_model, d_ff, n_heads, drop_p).to(DEVICE)
+model = BERTLM(bert, vocab_size, d_model).to(DEVICE)
+params = [p for p in model.parameters() if p.requires_grad] 
+optimizer = optim.Adam(nn.Linear(1, 1).parameters(), lr=0)
+Train(model, train_DL, val_DL, criterion, optimizer, scheduler)
+
+torch.save(model.state_dict(), save_model_path)
 ```

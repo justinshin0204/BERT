@@ -52,15 +52,17 @@ Now, lets move on to the implementation part
 To install the required datasets package, run the following command:
 
 ```bash
-pip install transformers torch datasets
+pip install transformers torch datasets einops
 ```
 Import the necessary modules in your python script
 ```py
 from transformers import BertTokenizer
+import pandas as pd
 from torch import nn, optim
 from datasets import load_dataset
-import random
+import math, random
 from torch.nn.utils.rnn import pad_sequence
+import time
 ```
 
 ## Load BERT Tokenizer
@@ -102,7 +104,8 @@ drop_p = 0.1
 warmup_steps = 10000
 LR_peak = 1e-4
 ```
-
+I set up the hyperparameters for BERT base because BERT large was too heavy, but even BERT base is still too heavy.😅
+you can change the setups if you want
 ## Dataset preprocessing
 ```py
 dataset = load_dataset('wikitext', 'wikitext-2-raw-v1')
@@ -120,6 +123,9 @@ for example in dataset['train']:
 texts=texts[:10000]
 data=texts
 ```
+We split the sentence by the dot ('.')  and put it in to a list named texts.
+This is a 1D array, which makes handling the data easier.
+
 
 ## Define the DataLoader
 ```py
@@ -179,7 +185,7 @@ Through the **`getitem`** function, we combine two sentences. If a generated ran
 
 The **`mask_tokens`** function takes the combined form of the two sentences, performs masking, and outputs the segment embeddings, token embeddings, and MTP labels.
 
-
+When an article changes, the following sentence might not be connected. However, due to the length of the paragraph, we decided to disregard this effect
 ```py
 def custom_collate_fn(batch):
     input_ids = [item[0] for item in batch]
@@ -253,9 +259,9 @@ class MHA(nn.Module):
 
         return x, attention_weights
 ```
-I'm sure the image below will help you understand the code clearly
+I think the `rearrange` function is absolutely beautiful
+I'm sure the image below will help you understand the code clearly ☺️.
 
-☺️
 
 
 ![image](https://github.com/justinshin0204/BERT/assets/93083019/84474740-3002-4b95-9a41-3fd64287db55)
@@ -275,7 +281,8 @@ class FeedForward(nn.Module):
         x = self.linear(x)
         return x
 ```
-This part is quite straightforward
+This part is quite straightforward.
+Remembert that we use GELU as an activation function in BERT.
 
 ## Encoderlayer
 ```py
@@ -337,7 +344,7 @@ class Encoder(nn.Module):
 
         return x
 ```
-
+we sum all the embeddings
 ## BERT
 ```py
 class BERT(nn.Module):
@@ -374,6 +381,8 @@ class BERT(nn.Module):
         out= self.encoder(x, seg, enc_mask, atten_map_save = atten_map_save)
 
         return out
+
+`make_enc_mask` masks the pad_sequence.
 ## BERT_LM
 class BERT_LM(nn.Module): 
     def __init__(self, bert, vocab_size, d_model):
@@ -404,11 +413,11 @@ def Train(model, train_DL, val_DL, criterion, optimizer, scheduler = None):
     for ep in range(EPOCH):
         epoch_start = time.time()
 
-        model.train() # train mode로 전환
+        model.train() # train mode
         train_loss = loss_epoch(model, train_DL, criterion, optimizer = optimizer, scheduler = scheduler)
         loss_history["train"] += [train_loss]
 
-        model.eval() # test mode로 전환
+        model.eval() # test mode
         with torch.no_grad():
             val_loss = loss_epoch(model, val_DL, criterion)
             loss_history["val"] += [val_loss]
@@ -427,7 +436,7 @@ def Train(model, train_DL, val_DL, criterion, optimizer, scheduler = None):
                 "BATCH_SIZE": BATCH_SIZE}, save_history_path)
 
 def Test(model, test_DL, criterion):
-    model.eval() # test mode로 전환
+    model.eval() # test mode
     with torch.no_grad():
         test_loss = loss_epoch(model, test_DL, criterion)
     print(f"Test loss: {test_loss:.3f} | Test PPL: {math.exp(test_loss):.3f}")
@@ -444,9 +453,9 @@ def loss_epoch(model, DL, criterion, optimizer = None, scheduler = None):
         # inference
         y_hat_NSP = model(x_batch, seg)[0]
         y_hat_MTP = model(x_batch, seg)[1]
-        # NSP와 MTP 각각에 대한 손실 계산
+        # Loss for NSP, MTP
         nsp_loss = criterion(y_hat_NSP, nsp_label)
-        mtp_loss = criterion(y_hat_MTP.permute(0,2,1), mtp_label) # y_hat은 개차단이 되어야
+        mtp_loss = criterion(y_hat_MTP.permute(0,2,1), mtp_label) 
         loss = nsp_loss + mtp_loss
         # update
         if optimizer is not None:

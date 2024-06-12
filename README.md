@@ -218,7 +218,7 @@ train_DL = torch.utils.data.DataLoader(train_DS, batch_size=BATCH_SIZE, shuffle=
 val_DL = torch.utils.data.DataLoader(val_DS, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate_fn)
 test_DL = torch.utils.data.DataLoader(test_DS, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate_fn)
 
-print((train_DS.data))
+print((train_DS))
 print(len(val_DS))
 print(len(test_DS))
 ```

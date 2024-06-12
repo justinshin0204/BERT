@@ -389,7 +389,7 @@ class BERT(nn.Module):
 
         return out
 
-`make_enc_mask` masks the pad_sequence.
+
 ## BERT_LM
 class BERT_LM(nn.Module): 
     def __init__(self, bert, vocab_size, d_model):
@@ -409,7 +409,7 @@ class BERT_LM(nn.Module):
 
         return self.nsp(x[:,0]), self.mtp(x)
 ```
-
+`make_enc_mask` masks the pad_sequence.
 # Training
 Now its time to finally test your model!
 
